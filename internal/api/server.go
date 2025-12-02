@@ -70,7 +70,6 @@ type APIServer struct {
 	startTime  time.Time
 }
 
-// NewAPIServer creates a new APIServer.
 func NewAPIServer(listenAddr string, engine *matching.Engine, metrics *metrics.Metrics) *APIServer {
 	return &APIServer{
 		listenAddr: listenAddr,
@@ -80,7 +79,6 @@ func NewAPIServer(listenAddr string, engine *matching.Engine, metrics *metrics.M
 	}
 }
 
-// Run starts the HTTP server.
 func (s *APIServer) Run() error {
 	mux := http.NewServeMux()
 

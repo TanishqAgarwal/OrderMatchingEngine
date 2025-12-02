@@ -12,7 +12,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// OrderBookDepth represents the aggregated depth of the order book.
 type OrderBookDepth struct {
 	Symbol    string           `json:"symbol"`
 	Timestamp int64            `json:"timestamp"`
@@ -25,10 +24,9 @@ type PriceLevelData struct {
 	Quantity int64 `json:"quantity"`
 }
 
-// PriceLevel represents a collection of orders at a specific price.
+
 type PriceLevel []*models.Order
 
-// OrderBook represents the order book for a single financial instrument.
 type OrderBook struct {
 	Symbol string
 	Bids   *redblacktree.Tree // Price (int64) -> PriceLevel ([]*Order)
@@ -37,13 +35,12 @@ type OrderBook struct {
 	mu     sync.RWMutex
 }
 
-// NewOrderBook creates and returns a new OrderBook.
 func NewOrderBook(symbol string) *OrderBook {
 	return &OrderBook{
 		Symbol: symbol,
 		// Bids are sorted in descending order (highest price first)
 		Bids: redblacktree.NewWith(func(a, b interface{}) int {
-			return utils.Int64Comparator(b, a) // Reverse comparison
+			return utils.Int64Comparator(b, a)
 		}),
 		// Asks are sorted in ascending order (lowest price first)
 		Asks:   redblacktree.NewWith(utils.Int64Comparator),
@@ -51,10 +48,9 @@ func NewOrderBook(symbol string) *OrderBook {
 	}
 }
 
-// AddOrder adds an order to the order book.
 func (ob *OrderBook) AddOrder(order *models.Order) {
 	if _, exists := ob.Orders[order.ID]; exists {
-		return // Order already exists
+		return
 	}
 	ob.Orders[order.ID] = order
 
@@ -79,7 +75,6 @@ func (ob *OrderBook) AddOrder(order *models.Order) {
 	}
 }
 
-// RemoveOrder removes an order from the order book by its ID.
 func (ob *OrderBook) RemoveOrder(orderID string) *models.Order {
 	order, exists := ob.Orders[orderID]
 	if !exists {
@@ -104,44 +99,39 @@ func (ob *OrderBook) RemoveOrder(orderID string) *models.Order {
 	priceLevel := level.(PriceLevel)
 	for i, o := range priceLevel {
 		if o.ID == orderID {
-			// Remove the order from the slice
+			// Remove the order
 			priceLevel = append(priceLevel[:i], priceLevel[i+1:]...)
 			break
 		}
 	}
 
 	if len(priceLevel) == 0 {
-		// If the price level is empty, remove it from the tree
 		tree.Remove(price)
 	} else {
-		// Otherwise, update the price level
 		tree.Put(price, priceLevel)
 	}
 
 	return order
 }
 
-// Lock locks the order book for writing.
+// Locking the order book
 func (ob *OrderBook) Lock() {
 	ob.mu.Lock()
 }
 
-// Unlock unlocks the order book for writing.
 func (ob *OrderBook) Unlock() {
 	ob.mu.Unlock()
 }
 
-// RLock locks the order book for reading.
+// Locking the order book for reading.
 func (ob *OrderBook) RLock() {
 	ob.mu.RLock()
 }
 
-// RUnlock unlocks the order book for reading.
 func (ob *OrderBook) RUnlock() {
 	ob.mu.RUnlock()
 }
 
-// GetBestBid returns the best (highest) bid price and the corresponding price level.
 func (ob *OrderBook) GetBestBid() *models.Order {
 	if ob.Bids.Empty() {
 		return nil
@@ -157,7 +147,6 @@ func (ob *OrderBook) GetBestBid() *models.Order {
 	return priceLevel[0]
 }
 
-// GetBestAsk returns the best (lowest) ask price and the corresponding price level.
 func (ob *OrderBook) GetBestAsk() *models.Order {
 	if ob.Asks.Empty() {
 		return nil
@@ -173,11 +162,7 @@ func (ob *OrderBook) GetBestAsk() *models.Order {
 	return priceLevel[0]
 }
 
-// CalculateLiquidity calculates the available liquidity for a given side up to maxNeeded.
-// Note: This method must be called while holding a lock on the order book if consistency is required,
-// but since it iterates the tree, it should ideally use RLock.
-// However, if called from ProcessOrder which holds Lock, we cannot RLock.
-// So this method assumes the caller holds the lock.
+
 func (ob *OrderBook) CalculateLiquidity(side models.Side, maxNeeded int64) int64 {
 	var tree *redblacktree.Tree
 	// If incoming order is Buy, it consumes Asks.
@@ -207,7 +192,7 @@ func (ob *OrderBook) CalculateLiquidity(side models.Side, maxNeeded int64) int64
 	return available
 }
 
-// GetDepth returns the aggregated depth of the order book.
+// returns the aggregated depth of the order book.
 func (ob *OrderBook) GetDepth(depthLimit int) *OrderBookDepth {
 	ob.RLock()
 	defer ob.RUnlock()
@@ -258,13 +243,13 @@ func (ob *OrderBook) GetDepth(depthLimit int) *OrderBookDepth {
 	return depth
 }
 
-// MatchResult contains the result of processing an order.
+
 type MatchResult struct {
 	Order  *models.Order
 	Trades []*models.Trade
 }
 
-// Engine is the core of the matching engine.
+
 type Engine struct {
 	OrderBooks map[string]*OrderBook
 	AllOrders  sync.Map // Map[string]*models.Order - Stores all orders for quick lookup
@@ -272,7 +257,6 @@ type Engine struct {
 	metrics    *metrics.Metrics
 }
 
-// NewEngine creates and returns a new Engine.
 func NewEngine(m *metrics.Metrics) *Engine {
 	return &Engine{
 		OrderBooks: make(map[string]*OrderBook),
@@ -280,7 +264,6 @@ func NewEngine(m *metrics.Metrics) *Engine {
 	}
 }
 
-// getOrderBook returns the order book for a given symbol, creating it if it doesn't exist.
 func (e *Engine) getOrderBook(symbol string) *OrderBook {
 	e.mu.RLock()
 	ob, exists := e.OrderBooks[symbol]
@@ -288,7 +271,6 @@ func (e *Engine) getOrderBook(symbol string) *OrderBook {
 
 	if !exists {
 		e.mu.Lock()
-		// Double check after acquiring write lock
 		ob, exists = e.OrderBooks[symbol]
 		if !exists {
 			ob = NewOrderBook(symbol)
@@ -299,7 +281,6 @@ func (e *Engine) getOrderBook(symbol string) *OrderBook {
 	return ob
 }
 
-// ProcessOrder processes an order and returns the match result.
 func (e *Engine) ProcessOrder(order *models.Order) (*MatchResult, error) {
 	startTime := time.Now()
 	defer func() {
@@ -313,19 +294,18 @@ func (e *Engine) ProcessOrder(order *models.Order) (*MatchResult, error) {
 		return nil, err
 	}
 
-	// Store the order in the global map
 	e.AllOrders.Store(order.ID, order)
 
 	ob := e.getOrderBook(order.Symbol)
 	ob.Lock()
 	defer ob.Unlock()
 
-	// Check liquidity for Market Orders
+	// check liquidity for Market Orders
 	if order.Type == models.Market {
 		available := ob.CalculateLiquidity(order.Side, order.OriginalQuantity)
 		if available < order.OriginalQuantity {
-			// Reject the order
-			e.AllOrders.Delete(order.ID) // Remove from store as it's rejected
+			// reject the order
+			e.AllOrders.Delete(order.ID)
 			return nil, fmt.Errorf("insufficient liquidity: only %d shares available, requested %d", available, order.OriginalQuantity)
 		}
 	}
@@ -341,11 +321,9 @@ func (e *Engine) ProcessOrder(order *models.Order) (*MatchResult, error) {
 	tradeCount := int64(len(trades))
 	e.metrics.IncTradesExecuted(tradeCount)
 	if tradeCount > 0 {
-		// Each trade matches the incoming order and a book order
 		e.metrics.IncOrdersMatched(tradeCount + 1)
 	}
 
-	// Update order status based on trades
 	if order.FilledQuantity > 0 {
 		if order.RemainingQuantity == 0 {
 			order.Status = models.Filled
@@ -353,25 +331,13 @@ func (e *Engine) ProcessOrder(order *models.Order) (*MatchResult, error) {
 			order.Status = models.PartialFill
 		}
 	} else {
-		// No trades, status remains Accepted
 		order.Status = models.Accepted
 	}
 
 	if order.RemainingQuantity > 0 {
-		// Market orders with remaining quantity should strictly NOT be added to book.
-		// However, due to the pre-check above, we should only reach here if we expected to fill it but raced?
-		// No, we hold the lock. So if we passed the check, we MUST be able to fill it fully?
-		// Wait. CalculateLiquidity sums up ALL liquidity.
-		// processMarketOrder walks the book and matches.
-		// Since we hold the lock, the liquidity shouldn't change between check and process.
-		// So for Market orders, if we passed the check, RemainingQuantity MUST be 0 here.
-		// Unless there's a bug in CalculateLiquidity or processMarketOrder.
-		
 		if order.Type == models.Market {
-			// This path should theoretically be unreachable if liquidity check passed and we hold the lock.
-			// But for safety:
-			// Do NOT add to book.
-			// Maybe log a warning?
+			// theoretically unreachable if liquidity check passed and we hold the lock
+			// but for safety: maybe log a warning?
 		} else {
 			ob.AddOrder(order)
 			e.metrics.IncOrdersInBook()
@@ -386,7 +352,6 @@ func (e *Engine) ProcessOrder(order *models.Order) (*MatchResult, error) {
 	}, nil
 }
 
-// processLimitOrder processes a limit order.
 func (e *Engine) processLimitOrder(order *models.Order, ob *OrderBook) []*models.Trade {
 	trades := make([]*models.Trade, 0)
 	if order.Side == models.Buy {
@@ -411,7 +376,6 @@ func (e *Engine) processLimitOrder(order *models.Order, ob *OrderBook) []*models
 	return trades
 }
 
-// processMarketOrder processes a market order.
 func (e *Engine) processMarketOrder(order *models.Order, ob *OrderBook) []*models.Trade {
 	trades := make([]*models.Trade, 0)
 	if order.Side == models.Buy {
@@ -430,7 +394,6 @@ func (e *Engine) processMarketOrder(order *models.Order, ob *OrderBook) []*model
 	return trades
 }
 
-// executeTrade creates a trade and updates the orders and order book.
 func (e *Engine) executeTrade(incomingOrder, bookOrder *models.Order, ob *OrderBook) *models.Trade {
 	tradeQuantity := incomingOrder.RemainingQuantity
 	if bookOrder.RemainingQuantity < tradeQuantity {
@@ -480,24 +443,20 @@ func getSellerOrderID(o1, o2 *models.Order) string {
 	return o2.ID
 }
 
-// CancelOrder cancels an order.
 func (e *Engine) CancelOrder(orderID string) (*models.Order, error) {
-	// Find order in global store
 	val, ok := e.AllOrders.Load(orderID)
 	if !ok {
 		return nil, fmt.Errorf("order not found")
 	}
 	order := val.(*models.Order)
 
-	// Check if already filled or cancelled
 	if order.Status == models.Filled {
 		return nil, fmt.Errorf("cannot cancel: order already filled")
 	}
 	if order.Status == models.Cancelled {
-		return order, nil // Already cancelled
+		return order, nil
 	}
 
-	// Remove from OrderBook
 	ob := e.getOrderBook(order.Symbol)
 	ob.Lock()
 	defer ob.Unlock()
@@ -509,24 +468,17 @@ func (e *Engine) CancelOrder(orderID string) (*models.Order, error) {
 
 	removedOrder := ob.RemoveOrder(orderID)
 	if removedOrder != nil {
-		// It was in the book, so we update status
 		removedOrder.Status = models.Cancelled
 		e.metrics.IncOrdersCancelled()
 		e.metrics.DecOrdersInBook()
 		return removedOrder, nil
 	} else {
-		// It wasn't in the book, but we have it in store.
-		// It might be a partially filled market order that wasn't added to book?
-		// Or a race condition?
-		// If it's not in book and not filled, it might be weird.
-		// But for now, we just mark it cancelled.
 		order.Status = models.Cancelled
 		e.metrics.IncOrdersCancelled()
 		return order, nil
 	}
 }
 
-// GetOrder returns an order by its ID.
 func (e *Engine) GetOrder(orderID string) (*models.Order, error) {
 	val, ok := e.AllOrders.Load(orderID)
 	if !ok {
@@ -535,7 +487,6 @@ func (e *Engine) GetOrder(orderID string) (*models.Order, error) {
 	return val.(*models.Order), nil
 }
 
-// GetOrderBookDepth returns the depth for a given symbol.
 func (e *Engine) GetOrderBookDepth(symbol string, depthLimit int) (*OrderBookDepth, error) {
 	ob := e.getOrderBook(symbol)
 	return ob.GetDepth(depthLimit), nil

@@ -149,6 +149,8 @@ func TestEngineConcurrency(t *testing.T) {
 	wg.Wait()
 }
 
+// BenchmarkPlaceOrder measures the throughput of placing orders into a pre-filled book.
+// Helps verify that the engine meets the high-performance requirement (e.g., 30k+ TPS).
 func BenchmarkPlaceOrder(b *testing.B) {
 	m := metrics.NewMetrics()
 	engine := NewEngine(m)
