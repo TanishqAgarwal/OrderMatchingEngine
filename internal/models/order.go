@@ -5,7 +5,6 @@ import (
 	"time"
 )
 
-// OrderStatus represents the state of an order.
 type OrderStatus int
 
 const (
@@ -30,12 +29,10 @@ func (os OrderStatus) String() string {
 	}
 }
 
-// MarshalJSON converts an OrderStatus to its string representation for JSON encoding.
 func (os OrderStatus) MarshalJSON() ([]byte, error) {
 	return []byte(`"` + os.String() + `"`), nil
 }
 
-// Side represents the side of an order (Buy or Sell).
 type Side int
 
 const (
@@ -43,7 +40,6 @@ const (
 	Sell
 )
 
-// String returns the string representation of a Side.
 func (s Side) String() string {
 	switch s {
 	case Buy:
@@ -55,15 +51,12 @@ func (s Side) String() string {
 	}
 }
 
-// MarshalJSON converts a Side to its string representation for JSON encoding.
 func (s Side) MarshalJSON() ([]byte, error) {
 	return []byte(`"` + s.String() + `"`), nil
 }
 
-// UnmarshalJSON converts a string to a Side for JSON decoding.
 func (s *Side) UnmarshalJSON(data []byte) error {
 	str := string(data)
-	// Remove quotes from the string
 	if len(str) >= 2 && str[0] == '"' && str[len(str)-1] == '"' {
 		str = str[1 : len(str)-1]
 	}
@@ -78,7 +71,6 @@ func (s *Side) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// OrderType represents the type of an order (Limit or Market).
 type OrderType int
 
 const (
@@ -86,7 +78,6 @@ const (
 	Market
 )
 
-// String returns the string representation of an OrderType.
 func (ot OrderType) String() string {
 	switch ot {
 	case Limit:
@@ -98,15 +89,12 @@ func (ot OrderType) String() string {
 	}
 }
 
-// MarshalJSON converts an OrderType to its string representation for JSON encoding.
 func (ot OrderType) MarshalJSON() ([]byte, error) {
 	return []byte(`"` + ot.String() + `"`), nil
 }
 
-// UnmarshalJSON converts a string to an OrderType for JSON decoding.
 func (ot *OrderType) UnmarshalJSON(data []byte) error {
 	str := string(data)
-	// Remove quotes from the string
 	if len(str) >= 2 && str[0] == '"' && str[len(str)-1] == '"' {
 		str = str[1 : len(str)-1]
 	}
@@ -135,7 +123,6 @@ type Order struct {
 	Timestamp         int64       `json:"timestamp"`
 }
 
-// NewOrder creates and returns a new Order.
 func NewOrder(id, symbol string, side Side, orderType OrderType, price, quantity int64) *Order {
 	return &Order{
 		ID:                id,
@@ -151,13 +138,12 @@ func NewOrder(id, symbol string, side Side, orderType OrderType, price, quantity
 	}
 }
 
-// String returns the string representation of an Order for logging.
+// returns the string representation of an Order for logging.
 func (o *Order) String() string {
 	return fmt.Sprintf("Order[ID: %s, Symbol: %s, Side: %s, Type: %s, Price: %d, Quantity: %d/%d, Status: %s, Timestamp: %d]",
 		o.ID, o.Symbol, o.Side, o.Type, o.Price, o.RemainingQuantity, o.OriginalQuantity, o.Status, o.Timestamp)
 }
 
-// Validate checks if the order has valid fields.
 func (o *Order) Validate() error {
 	if o.Type == Limit && o.Price <= 0 {
 		return fmt.Errorf("invalid price: must be positive for limit orders")
