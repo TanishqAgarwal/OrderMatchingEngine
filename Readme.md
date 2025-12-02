@@ -60,8 +60,8 @@ The system uses a **Red-Black Tree** to store order books, ensuring `O(log N)` t
 
 Benchmarks run on an Apple M1 Pro (8-core):
 
-| Metric | Result | Target | Status |
-| :--- | :--- | :--- | :--- |
+| Metric | Result | Target |
+| :--- | :--- | :--- |
 | **Throughput** | **~705,716 ops/sec** | 30,000 ops/sec (required)
 | **Latency (Avg)** | **1.4 microseconds** | < 10 ms (required)
 
