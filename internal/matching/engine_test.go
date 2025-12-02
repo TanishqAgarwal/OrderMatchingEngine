@@ -92,23 +92,26 @@ func TestProcessOrder_MarketOrderRejection(t *testing.T) {
 	m := metrics.NewMetrics()
 	engine := NewEngine(m)
 
+	// Sell order: 5 shares @ 100
 	sellOrder := models.NewOrder("seller1", "BTCUSD", models.Sell, models.Limit, 100, 5)
 	engine.ProcessOrder(sellOrder)
 
+	// Market Buy order: 10 shares
 	buyOrder := models.NewOrder("buyer1", "BTCUSD", models.Buy, models.Market, 0, 10)
 	result, err := engine.ProcessOrder(buyOrder)
 
-	assert.NoError(t, err)
-	assert.Equal(t, 1, len(result.Trades))
-	assert.Equal(t, int64(5), buyOrder.RemainingQuantity) 
-	// Market order remainder is rejected/cancelled, so not in book.
-	// Status should be PartialFill (since we matched some) or Cancelled?
-	// In our engine logic: "if order.Type == models.Market ... we do NOT add to book."
-	// And status becomes PartialFill if Remaining > 0 but not added.
+	// EXPECTATION: Should FAIL with "insufficient liquidity"
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "insufficient liquidity")
+	assert.Contains(t, err.Error(), "only 5 shares available")
+	assert.Nil(t, result)
 	
-	// Book should be empty
+	// Book should still contain the sell order
 	ob := engine.getOrderBook("BTCUSD")
-	assert.True(t, ob.Asks.Empty())
+	assert.False(t, ob.Asks.Empty()) // The sell order should remain untouched
+	
+	bestAsk := ob.GetBestAsk()
+	assert.Equal(t, int64(5), bestAsk.RemainingQuantity) // Nothing matched
 }
 
 func TestEngineConcurrency(t *testing.T) {

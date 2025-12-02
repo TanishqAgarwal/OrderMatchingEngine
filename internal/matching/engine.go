@@ -173,6 +173,40 @@ func (ob *OrderBook) GetBestAsk() *models.Order {
 	return priceLevel[0]
 }
 
+// CalculateLiquidity calculates the available liquidity for a given side up to maxNeeded.
+// Note: This method must be called while holding a lock on the order book if consistency is required,
+// but since it iterates the tree, it should ideally use RLock.
+// However, if called from ProcessOrder which holds Lock, we cannot RLock.
+// So this method assumes the caller holds the lock.
+func (ob *OrderBook) CalculateLiquidity(side models.Side, maxNeeded int64) int64 {
+	var tree *redblacktree.Tree
+	// If incoming order is Buy, it consumes Asks.
+	// If incoming order is Sell, it consumes Bids.
+	if side == models.Buy {
+		tree = ob.Asks
+	} else {
+		tree = ob.Bids
+	}
+
+	if tree.Empty() {
+		return 0
+	}
+
+	it := tree.Iterator()
+	it.Begin()
+	var available int64 = 0
+	for it.Next() {
+		priceLevel := it.Value().(PriceLevel)
+		for _, order := range priceLevel {
+			available += order.RemainingQuantity
+			if available >= maxNeeded {
+				return available
+			}
+		}
+	}
+	return available
+}
+
 // GetDepth returns the aggregated depth of the order book.
 func (ob *OrderBook) GetDepth(depthLimit int) *OrderBookDepth {
 	ob.RLock()
@@ -286,6 +320,16 @@ func (e *Engine) ProcessOrder(order *models.Order) (*MatchResult, error) {
 	ob.Lock()
 	defer ob.Unlock()
 
+	// Check liquidity for Market Orders
+	if order.Type == models.Market {
+		available := ob.CalculateLiquidity(order.Side, order.OriginalQuantity)
+		if available < order.OriginalQuantity {
+			// Reject the order
+			e.AllOrders.Delete(order.ID) // Remove from store as it's rejected
+			return nil, fmt.Errorf("insufficient liquidity: only %d shares available, requested %d", available, order.OriginalQuantity)
+		}
+	}
+
 	trades := make([]*models.Trade, 0)
 
 	if order.Type == models.Limit {
@@ -314,33 +358,20 @@ func (e *Engine) ProcessOrder(order *models.Order) (*MatchResult, error) {
 	}
 
 	if order.RemainingQuantity > 0 {
-		// Market orders with remaining quantity are not added to the book.
+		// Market orders with remaining quantity should strictly NOT be added to book.
+		// However, due to the pre-check above, we should only reach here if we expected to fill it but raced?
+		// No, we hold the lock. So if we passed the check, we MUST be able to fill it fully?
+		// Wait. CalculateLiquidity sums up ALL liquidity.
+		// processMarketOrder walks the book and matches.
+		// Since we hold the lock, the liquidity shouldn't change between check and process.
+		// So for Market orders, if we passed the check, RemainingQuantity MUST be 0 here.
+		// Unless there's a bug in CalculateLiquidity or processMarketOrder.
+		
 		if order.Type == models.Market {
-			// This indicates insufficient liquidity, but we don't return an error here as per some designs,
-			// but for this specific requirement "Response (400 Bad Request - Insufficient Liquidity for Market Order)",
-			// we should probably check if it was a market order and if it wasn't fully filled.
-			// However, partial fills are allowed for Limit orders.
-			// If it's a market order and we are here, it means we ran out of liquidity.
-			// We'll leave it as partial fill or filled (if 0 remaining).
-			// If it's a completely unfilled market order (Accepted), we should probably return an error?
-			// The requirements say: "Response (400 Bad Request - Insufficient Liquidity for Market Order)"
-			// This implies if we can't fill it at all or fully? "only 50 shares available, requested 100" implies partial fill is NOT OK for Market Orders?
-			// "Response (202 Accepted - Partial Fill)" is listed for Submit Order.
-			// Let's assume Market Orders match as much as possible, and the remainder is cancelled/rejected.
-			// The error might be returned if *no* liquidity or *partial* liquidity?
-			// "Insufficient liquidity: only 50 shares available, requested 100" -> This sounds like an error response.
-			// If a Market Order is partially filled, do we return 202 or 400?
-			// Use case 4.1 shows 202 Partial Fill.
-			// Use case "Insufficient Liquidity" shows 400.
-			// I'll assume if a market order cannot be *fully* filled, it's an error? Or maybe if it cannot be filled *at all*?
-			// Let's implement: If Market Order and Remaining > 0, we cancel the remainder.
-			// If FilledQuantity == 0 (no liquidity), we return error?
-			if order.FilledQuantity == 0 {
-				return nil, fmt.Errorf("insufficient liquidity")
-			}
-			// If partially filled, we accept it as is (PartialFill status), and the rest is effectively cancelled (not added to book).
-			order.Status = models.PartialFill // Or Filled if we consider "done" as filled. But PartialFill is more accurate.
-			// We do NOT add to book.
+			// This path should theoretically be unreachable if liquidity check passed and we hold the lock.
+			// But for safety:
+			// Do NOT add to book.
+			// Maybe log a warning?
 		} else {
 			ob.AddOrder(order)
 			e.metrics.IncOrdersInBook()

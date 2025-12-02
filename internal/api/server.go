@@ -2,12 +2,12 @@ package api
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"repello/internal/matching"
 	"repello/internal/metrics"
 	"repello/internal/models"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -43,13 +43,6 @@ type CancelOrderResponse struct {
 	OrderID string `json:"order_id"`
 	Status  string `json:"status"`
 }
-
-// OrderBookLevelResponse is reused from engine struct but we define it here for clarity if needed,
-// but the engine returns OrderBookDepth which has nested structs.
-// We can just serialize the engine response directly if it matches.
-// The engine returns matching.OrderBookDepth which has Bids/Asks as []matching.PriceLevelData
-// matching.PriceLevelData has Price and Quantity fields with json tags "price" and "quantity".
-// So it matches the spec: {"price": 10045, "quantity": 500}
 
 type GetOrderResponse struct {
 	OrderID        string           `json:"order_id"`
@@ -120,12 +113,9 @@ func (s *APIServer) handleCreateOrder(w http.ResponseWriter, r *http.Request) {
 	result, err := s.engine.ProcessOrder(order)
 	if err != nil {
 		// Check for specific error messages
-		if err.Error() == "insufficient liquidity" {
-			// Spec requires specific message: "Insufficient liquidity: only X shares available, requested Y"
-			// But since we didn't fill it, filled is 0? Or partial fill?
-			// The engine returns error only if filled == 0 for Market orders.
-			msg := fmt.Sprintf("Insufficient liquidity: only %d shares available, requested %d", order.FilledQuantity, order.OriginalQuantity)
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": msg})
+		// If the error message contains "insufficient liquidity", return 400
+		if strings.Contains(err.Error(), "insufficient liquidity") {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -162,8 +152,6 @@ func (s *APIServer) handleCreateOrder(w http.ResponseWriter, r *http.Request) {
 		response.FilledQuantity = order.FilledQuantity
 		writeJSON(w, http.StatusOK, response)
 	case models.Cancelled:
-		// Should not happen on create unless immediate cancel (IOC) logic exists, which we don't have yet.
-		// Or if engine cancelled it.
 		writeJSON(w, http.StatusOK, response) 
 	}
 }
@@ -171,7 +159,6 @@ func (s *APIServer) handleCreateOrder(w http.ResponseWriter, r *http.Request) {
 func (s *APIServer) handleCancelOrder(w http.ResponseWriter, r *http.Request) {
 	orderID := r.PathValue("id")
 	
-	// No symbol required anymore
 	order, err := s.engine.CancelOrder(orderID)
 	if err != nil {
 		if err.Error() == "cannot cancel: order already filled" {
@@ -201,7 +188,7 @@ func (s *APIServer) handleGetOrderBook(w http.ResponseWriter, r *http.Request) {
 		var err error
 		depthVal, err = strconv.Atoi(depthParam)
 		if err != nil {
-			depthVal = 0 // Default to full (or engine handles it)
+			depthVal = 0 // Default to full
 		}
 	}
 
@@ -211,7 +198,6 @@ func (s *APIServer) handleGetOrderBook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The engine returns matching.OrderBookDepth which matches the JSON structure required.
 	writeJSON(w, http.StatusOK, depth)
 }
 
@@ -240,15 +226,8 @@ func (s *APIServer) handleGetOrder(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *APIServer) handleHealthCheck(w http.ResponseWriter, r *http.Request) {
-	// We need metrics for orders processed. 
-	// Ideally we get this from s.metrics.
-	// We didn't expose a GetOrdersProcessed in metrics, but we can access the atomic value or use JSON.
-	// Using the json output of metrics is one way, or adding a method.
-	// For simplicity, I'll just use a placeholder or read the public field if I made it public (I did).
-	// Metrics fields are exported (e.g. OrdersReceived).
-	
 	uptime := int64(time.Since(s.startTime).Seconds())
-	processed := s.metrics.OrdersReceived.Load() // Spec says "processed", likely received or matched? "150000" in example. "Received" fits.
+	processed := s.metrics.OrdersReceived.Load()
 
 	resp := HealthResponse{
 		Status:          "healthy",
