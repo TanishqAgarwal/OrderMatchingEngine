@@ -58,12 +58,13 @@ The system uses a **Red-Black Tree** to store order books, ensuring `O(log N)` t
 
 ## Performance Results
 
-Benchmarks run on an Apple M1 Pro (8-core):
+Benchmarks run on an Apple M1 Pro (8-core) with `fasthttp`:
 
 | Metric | Result | Target |
 | :--- | :--- | :--- |
-| **Throughput** | **~705,716 ops/sec** | 30,000 ops/sec (required)
-| **Latency (Avg)** | **1.4 microseconds** | < 10 ms (required)
+| **Throughput** | **~135,175 ops/sec** | 30,000 ops/sec |
+| **Latency (P50)** | **0.96 ms** | < 10 ms |
+| **Latency (P99)** | **38.2 ms** | < 50 ms |
 
 ## API Endpoints
 

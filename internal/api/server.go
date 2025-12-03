@@ -2,7 +2,6 @@ package api
 
 import (
 	"encoding/json"
-	"net/http"
 	"repello/internal/matching"
 	"repello/internal/metrics"
 	"repello/internal/models"
@@ -11,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/valyala/fasthttp"
 )
 
 // --- Request/Response Structs ---
@@ -70,6 +70,7 @@ type APIServer struct {
 	startTime  time.Time
 }
 
+// NewAPIServer creates a new APIServer.
 func NewAPIServer(listenAddr string, engine *matching.Engine, metrics *metrics.Metrics) *APIServer {
 	return &APIServer{
 		listenAddr: listenAddr,
@@ -79,23 +80,68 @@ func NewAPIServer(listenAddr string, engine *matching.Engine, metrics *metrics.M
 	}
 }
 
+// Run starts the HTTP server.
 func (s *APIServer) Run() error {
-	mux := http.NewServeMux()
+	// fasthttp RequestHandler
+	handler := func(ctx *fasthttp.RequestCtx) {
+		path := string(ctx.Path())
+		method := string(ctx.Method())
 
-	mux.HandleFunc("POST /api/v1/orders", s.handleCreateOrder)
-	mux.HandleFunc("DELETE /api/v1/orders/{id}", s.handleCancelOrder)
-	mux.HandleFunc("GET /api/v1/orderbook/{symbol}", s.handleGetOrderBook)
-	mux.HandleFunc("GET /api/v1/orders/{id}", s.handleGetOrder)
-	mux.HandleFunc("GET /health", s.handleHealthCheck)
-	mux.HandleFunc("GET /metrics", s.handleGetMetrics)
+		switch path {
+		case "/api/v1/orders":
+			if method == "POST" {
+				s.handleCreateOrder(ctx)
+			} else {
+				ctx.Error("Method not allowed", fasthttp.StatusMethodNotAllowed)
+			}
+		case "/health":
+			if method == "GET" {
+				s.handleHealthCheck(ctx)
+			} else {
+				ctx.Error("Method not allowed", fasthttp.StatusMethodNotAllowed)
+			}
+		case "/metrics":
+			if method == "GET" {
+				s.handleGetMetrics(ctx)
+			} else {
+				ctx.Error("Method not allowed", fasthttp.StatusMethodNotAllowed)
+			}
+		default:
+			// Handle paths with parameters (e.g., /api/v1/orders/{id})
+			if strings.HasPrefix(path, "/api/v1/orders/") {
+				if method == "DELETE" {
+					// Extract ID: /api/v1/orders/{id}
+					id := strings.TrimPrefix(path, "/api/v1/orders/")
+					s.handleCancelOrder(ctx, id)
+				} else if method == "GET" {
+					id := strings.TrimPrefix(path, "/api/v1/orders/")
+					s.handleGetOrder(ctx, id)
+				} else {
+					ctx.Error("Method not allowed", fasthttp.StatusMethodNotAllowed)
+				}
+				return
+			}
+			if strings.HasPrefix(path, "/api/v1/orderbook/") {
+				if method == "GET" {
+					symbol := strings.TrimPrefix(path, "/api/v1/orderbook/")
+					s.handleGetOrderBook(ctx, symbol)
+				} else {
+					ctx.Error("Method not allowed", fasthttp.StatusMethodNotAllowed)
+				}
+				return
+			}
+			ctx.Error("Not Found", fasthttp.StatusNotFound)
+		}
+	}
 
-	return http.ListenAndServe(s.listenAddr, mux)
+	return fasthttp.ListenAndServe(s.listenAddr, handler)
 }
 
-func (s *APIServer) handleCreateOrder(w http.ResponseWriter, r *http.Request) {
+func (s *APIServer) handleCreateOrder(ctx *fasthttp.RequestCtx) {
 	var req CreateOrderRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+	// fasthttp provides body via ctx.PostBody()
+	if err := json.Unmarshal(ctx.PostBody(), &req); err != nil {
+		writeJSON(ctx, fasthttp.StatusBadRequest, map[string]string{"error": "invalid request body"})
 		return
 	}
 
@@ -110,17 +156,14 @@ func (s *APIServer) handleCreateOrder(w http.ResponseWriter, r *http.Request) {
 
 	result, err := s.engine.ProcessOrder(order)
 	if err != nil {
-		// Check for specific error messages
-		// If the error message contains "insufficient liquidity", return 400
 		if strings.Contains(err.Error(), "insufficient liquidity") {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			writeJSON(ctx, fasthttp.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		writeJSON(ctx, fasthttp.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 
-	// Build the detailed response
 	response := CreateOrderResponse{
 		OrderID: order.ID,
 		Status:  order.Status.String(),
@@ -141,30 +184,28 @@ func (s *APIServer) handleCreateOrder(w http.ResponseWriter, r *http.Request) {
 	switch order.Status {
 	case models.Accepted:
 		response.Message = "Order added to book"
-		writeJSON(w, http.StatusCreated, response)
+		writeJSON(ctx, fasthttp.StatusCreated, response)
 	case models.PartialFill:
 		response.FilledQuantity = order.FilledQuantity
 		response.RemainingQuantity = order.RemainingQuantity
-		writeJSON(w, http.StatusAccepted, response)
+		writeJSON(ctx, fasthttp.StatusAccepted, response)
 	case models.Filled:
 		response.FilledQuantity = order.FilledQuantity
-		writeJSON(w, http.StatusOK, response)
+		writeJSON(ctx, fasthttp.StatusOK, response)
 	case models.Cancelled:
-		writeJSON(w, http.StatusOK, response) 
+		writeJSON(ctx, fasthttp.StatusOK, response)
 	}
 }
 
-func (s *APIServer) handleCancelOrder(w http.ResponseWriter, r *http.Request) {
-	orderID := r.PathValue("id")
-	
+func (s *APIServer) handleCancelOrder(ctx *fasthttp.RequestCtx, orderID string) {
 	order, err := s.engine.CancelOrder(orderID)
 	if err != nil {
 		if err.Error() == "cannot cancel: order already filled" {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			writeJSON(ctx, fasthttp.StatusBadRequest, map[string]string{"error": err.Error()})
 		} else if err.Error() == "order not found" {
-			writeJSON(w, http.StatusNotFound, map[string]string{"error": "Order not found"})
+			writeJSON(ctx, fasthttp.StatusNotFound, map[string]string{"error": "Order not found"})
 		} else {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			writeJSON(ctx, fasthttp.StatusBadRequest, map[string]string{"error": err.Error()})
 		}
 		return
 	}
@@ -173,38 +214,33 @@ func (s *APIServer) handleCancelOrder(w http.ResponseWriter, r *http.Request) {
 		OrderID: order.ID,
 		Status:  order.Status.String(),
 	}
-	writeJSON(w, http.StatusOK, response)
+	writeJSON(ctx, fasthttp.StatusOK, response)
 }
 
-func (s *APIServer) handleGetOrderBook(w http.ResponseWriter, r *http.Request) {
-	symbol := r.PathValue("symbol")
-
-	// Handle 'depth' query parameter
-	depthParam := r.URL.Query().Get("depth")
+func (s *APIServer) handleGetOrderBook(ctx *fasthttp.RequestCtx, symbol string) {
+	depthParam := string(ctx.QueryArgs().Peek("depth"))
 	depthVal := 0
 	if depthParam != "" {
 		var err error
 		depthVal, err = strconv.Atoi(depthParam)
 		if err != nil {
-			depthVal = 0 // Default to full
+			depthVal = 0
 		}
 	}
 
 	depth, err := s.engine.GetOrderBookDepth(symbol, depthVal)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeJSON(ctx, fasthttp.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 
-	writeJSON(w, http.StatusOK, depth)
+	writeJSON(ctx, fasthttp.StatusOK, depth)
 }
 
-func (s *APIServer) handleGetOrder(w http.ResponseWriter, r *http.Request) {
-	orderID := r.PathValue("id")
-	
+func (s *APIServer) handleGetOrder(ctx *fasthttp.RequestCtx, orderID string) {
 	order, err := s.engine.GetOrder(orderID)
 	if err != nil {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "Order not found"})
+		writeJSON(ctx, fasthttp.StatusNotFound, map[string]string{"error": "Order not found"})
 		return
 	}
 
@@ -220,10 +256,10 @@ func (s *APIServer) handleGetOrder(w http.ResponseWriter, r *http.Request) {
 		Timestamp:      order.Timestamp,
 	}
 
-	writeJSON(w, http.StatusOK, response)
+	writeJSON(ctx, fasthttp.StatusOK, response)
 }
 
-func (s *APIServer) handleHealthCheck(w http.ResponseWriter, r *http.Request) {
+func (s *APIServer) handleHealthCheck(ctx *fasthttp.RequestCtx) {
 	uptime := int64(time.Since(s.startTime).Seconds())
 	processed := s.metrics.OrdersReceived.Load()
 
@@ -232,15 +268,17 @@ func (s *APIServer) handleHealthCheck(w http.ResponseWriter, r *http.Request) {
 		UptimeSeconds:   uptime,
 		OrdersProcessed: processed,
 	}
-	writeJSON(w, http.StatusOK, resp)
+	writeJSON(ctx, fasthttp.StatusOK, resp)
 }
 
-func (s *APIServer) handleGetMetrics(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, s.metrics)
+func (s *APIServer) handleGetMetrics(ctx *fasthttp.RequestCtx) {
+	writeJSON(ctx, fasthttp.StatusOK, s.metrics)
 }
 
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(v)
+func writeJSON(ctx *fasthttp.RequestCtx, status int, v any) {
+	ctx.Response.Header.SetContentType("application/json")
+	ctx.SetStatusCode(status)
+	if err := json.NewEncoder(ctx).Encode(v); err != nil {
+		ctx.Error(err.Error(), fasthttp.StatusInternalServerError)
+	}
 }
