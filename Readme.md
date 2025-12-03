@@ -7,8 +7,8 @@ Kept the file structure according to what I read the industry standards are. Als
 This project implements a limit order book matching engine designed for low latency and high throughput. It supports standard trading operations including Limit Orders, Market Orders, and Cancellations, all exposed via a REST API.
 
 **Key Features:**
-*   **High Performance:** ~700,000+ orders/second matching engine throughput.
-*   **Low Latency:** Average engine latency < 2 microseconds.
+*   **High Performance:** ~135,000+ HTTP requests/second (end-to-end) and ~850,000+ engine ops/sec.
+*   **Low Latency:** < 1 ms end-to-end P50 latency; engine latency < 2 microseconds.
 *   **Concurrency:** Thread-safe execution with granular symbol-level locking.
 *   **Correctness:** Strict price-time priority and "All-or-None" liquidity checks for Market Orders.
 *   **Observability:** Real-time metrics with accurate P50, P99, and P999 latency histograms (microsecond precision).
